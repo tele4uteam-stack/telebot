@@ -1,0 +1,9 @@
+# Tele4U Lite - Render Dependencies
+telethon>=1.34.0
+flask>=3.0.0
+cryptg>=0.4.0
+pyaes>=1.6.1
+rsa>=4.9
+# پروکسی برای generate_session.py (روی Render لازم نیست، فقط برای اجرای محلی)
+python-socks>=2.4.3
+PySocks>=1.7.1

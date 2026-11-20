@@ -1,0 +1,26 @@
+# Render Blueprint برای استقرار Tele4U Lite
+# فایل رو در ریشه repo بذار، بعد در Render: New → Blueprint → انتخاب repo
+
+services:
+  - type: web
+    name: tele4u-lite
+    runtime: python
+    plan: free
+    region: oregon              # یا frankfurt (پیشنهادی برای ایران)
+    branch: main
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: API_ID
+        sync: false              # مقدار رو دستی در Render وارد کن
+      - key: API_HASH
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: BOT_OWNER_ID
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+    healthCheckPath: /health
+    autoDeploy: true
