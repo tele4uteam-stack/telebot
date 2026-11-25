@@ -8,6 +8,9 @@ Tele4U Lite - نسخه Render (ساده‌شده)
   ۲. !delall - پاکسازی همه پیام‌های گروه (فقط از @Nitro_plusbot)
   ۳. گزارش خودکار هر ۳۰ دقیقه به آیدی عددی 258913714
   ۴. پاسخ به کد 3357 با پیام "ربات آنلاینه"
+  ۵. !startvch - شروع ویس چت گروه و پین اعلان آبی (فقط از @Nitro_plusbot)
+  ۶. !delvch - پایان/حذف ویس چت گروه (فقط از @Nitro_plusbot)
+  ۷. !deloff - اخراج اکانت‌های دلیت‌اکانت شده از گروه (فقط از @Nitro_plusbot)
 """
 
 import asyncio
@@ -20,6 +23,18 @@ from datetime import datetime, timedelta
 from telethon import TelegramClient, events
 from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
+from telethon.tl.functions.channels import GetFullChannelRequest
+from telethon.tl.functions.messages import UpdatePinnedMessageRequest
+from telethon.tl.functions.phone import (
+    CreateGroupCallRequest,
+    DiscardGroupCallRequest,
+)
+from telethon.tl.functions.messages import EditMessageRequest
+from telethon.tl.types import (
+    MessageMediaWebPage,
+    MessageEntityUrl,
+    MessageEntityTextUrl,
+)
 
 # -------------------- تنظیمات از environment variables --------------------
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -217,7 +232,7 @@ async def status_reporter():
                 f"✅ ربات آنلاینه دوست من\n"
                 f"⏱️ زمان روشن بودن: {uptime}\n"
                 f"🕐 زمان فعلی: {now}\n"
-                f"📡 دستورات فعال: `!tagall`, `!delall`\n"
+                f"📡 دستورات فعال: `!tagall`, `!delall`, `!startvch`, `!delvch`, `!deloff`\n"
                 f"🤖 ربات مجاز دستور: @{ALLOWED_BOT_USERNAME}\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             )
@@ -334,6 +349,233 @@ async def delete_all(event):
         await status.edit(f"❌ پاکسازی کامل نشد: {html.escape(str(exc))[:700]}")
 
 
+# ==================== ۳. شروع ویس چت ====================
+@client.on(events.NewMessage(pattern=r"^!startvch$"))
+async def start_voice_chat(event):
+    """شروع ویس چت گروه و پین کردن اعلان آبی تولیدشده توسط تلگرام."""
+    if not await check_command(event):
+        return
+    status = await event.reply("⏳ در حال شروع ویس چت...")
+
+    try:
+        chat = await event.get_input_chat()
+
+        # --- بررسی اینکه قبلاً ویس چت فعالی هست یا نه ---
+        try:
+            full = await client(GetFullChannelRequest(chat))
+            call = getattr(full.full_chat, "call", None)
+            if call is not None:
+                await status.edit("⚠️ ویس چت از قبل فعاله. برای حذف `!delvch` رو بفرست.")
+                logger.info("🎤 ویس چت از قبل فعال بود (chat=%s)", event.chat_id)
+                return
+        except Exception as exc:
+            logger.warning("بررسی وضعیت ویس چت ناموفق بود: %s", exc)
+
+        # --- ساخت ویس چت ---
+        try:
+            await client(CreateGroupCallRequest(
+                peer=chat,
+                random_id=os.urandom(16).hex()[:14],
+            ))
+        except FloodWaitError as exc:
+            await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر...")
+            await asyncio.sleep(exc.seconds + 1)
+            await client(CreateGroupCallRequest(
+                peer=chat,
+                random_id=os.urandom(16).hex()[:14],
+            ))
+
+        await status.edit("✅ ویس چت ساخته شد؛ در حال پیدا کردن اعلان آبی...")
+        logger.info("🎤 ویس چت ساخته شد (chat=%s)", event.chat_id)
+
+        # --- پیدا کردن اعلان آبی (service message) و پین کردنش ---
+        pinned = False
+        # پیام‌های اخیر رو از جدید به قدیم می‌گردیم
+        async for msg in client.iter_messages(event.chat_id, limit=10):
+            if not msg:
+                continue
+            # اعلان آبی پیام service است (action داره) و معمولاً در زمان ساخت call ساخته می‌شه
+            action = getattr(msg, "action", None)
+            if action is None:
+                continue
+            action_type = type(action).__name__
+            if action_type in ("MessageActionGroupCall", "MessageActionInviteToGroupCall", "MessageActionGroupCallScheduled"):
+                try:
+                    await client(UpdatePinnedMessageRequest(
+                        peer=chat,
+                        id=msg.id,
+                        silent=True,
+                    ))
+                    pinned = True
+                    logger.info("📌 اعلان ویس چت پین شد (msg_id=%s, type=%s)",
+                                msg.id, action_type)
+                    break
+                except FloodWaitError as exc:
+                    await status.edit(f"⏳ محدودیت پین؛ {exc.seconds} ثانیه صبر...")
+                    await asyncio.sleep(exc.seconds + 1)
+                    await client(UpdatePinnedMessageRequest(
+                        peer=chat,
+                        id=msg.id,
+                        silent=True,
+                    ))
+                    pinned = True
+                    logger.info("📌 اعلان ویس چت بعد از FloodWait پین شد (msg_id=%s)", msg.id)
+                    break
+                except Exception as exc:
+                    logger.exception("پین اعلان ناموفق بود: %s", exc)
+                    break
+
+        if pinned:
+            await finish_status(status, "✅ ویس چت شروع شد و اعلان آبی پین شد. 🎤", 5)
+        else:
+            await finish_status(status, "✅ ویس چت شروع شد (اعلان آبی پیدا نشد تا پین شه).", 5)
+
+    except Exception as exc:
+        logger.exception("خطا در startvch")
+        await status.edit(f"❌ شروع ویس چت ناموفق بود: {html.escape(str(exc))[:700]}")
+
+
+# ==================== ۴. حذف ویس چت ====================
+@client.on(events.NewMessage(pattern=r"^!delvch$"))
+async def delete_voice_chat(event):
+    """پایان/حذف ویس چت فعال گروه."""
+    if not await check_command(event):
+        return
+    status = await event.reply("⏳ در حال بررسی ویس چت فعال...")
+
+    try:
+        chat = await event.get_input_chat()
+
+        # --- گرفتن آیدی ویس چت فعال از اطلاعات کانال ---
+        try:
+            full = await client(GetFullChannelRequest(chat))
+            call = getattr(full.full_chat, "call", None)
+        except Exception as exc:
+            logger.exception("گرفتن اطلاعات کانال ناموفق بود: %s", exc)
+            await status.edit(f"❌ گرفتن اطلاعات گروه ناموفق بود: {html.escape(str(exc))[:500]}")
+            return
+
+        if call is None:
+            await status.edit("ℹ️ هیچ ویس چت فعالی وجود نداره.")
+            logger.info("🎤 ویس چت فعالی وجود نداشت (chat=%s)", event.chat_id)
+            return
+
+        # --- حذف ویس چت ---
+        try:
+            await client(DiscardGroupCallRequest(call=call))
+        except FloodWaitError as exc:
+            await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر...")
+            await asyncio.sleep(exc.seconds + 1)
+            await client(DiscardGroupCallRequest(call=call))
+
+        logger.info("🎤 ویس چت حذف شد (chat=%s)", event.chat_id)
+        await finish_status(status, "✅ ویس چت پایان یافت. 🎤", 5)
+
+    except Exception as exc:
+        logger.exception("خطا در delvch")
+        await status.edit(f"❌ حذف ویس چت ناموفق بود: {html.escape(str(exc))[:700]}")
+
+
+# ==================== ۵. اخراج اکانت‌های دلیت‌اکانت شده ====================
+@client.on(events.NewMessage(pattern=r"^!deloff$"))
+async def kick_deleted_accounts(event):
+    """پیدا و اخراج همه اکانت‌های دلیت‌اکانت شده (Deleted Account) از گروه."""
+    if not await check_command(event):
+        return
+    status = await event.reply("⏳ در حال بررسی اعضای گروه برای پیدا کردن اکانت‌های حذف‌شده...")
+
+    try:
+        chat = await event.get_input_chat()
+
+        # --- پیدا کردن اکانت‌های دلیت‌اکانت شده ---
+        deleted_users = []
+        total = 0
+        async for member in client.iter_participants(event.chat_id):
+            total += 1
+            # اکانت‌های دلیت‌اکانت شده معمولاً first_name خالی، last_name خالی،
+            # username خالی و deleted=True دارن
+            first = getattr(member, "first_name", None)
+            last = getattr(member, "last_name", None)
+            username = getattr(member, "username", None)
+            is_deleted = getattr(member, "deleted", False)
+
+            if is_deleted or (not first and not last and not username):
+                deleted_users.append(member)
+
+        if not deleted_users:
+            await finish_status(status, "✅ هیچ اکانت دلیت‌اکانت‌شده‌ای پیدا نشد.", 5)
+            logger.info("🧹 هیچ اکانت حذف‌شده‌ای پیدا نشد (chat=%s, total=%d)",
+                        event.chat_id, total)
+            return
+
+        await status.edit(f"🔍 {len(deleted_users)} اکانت حذف‌شده پیدا شد؛ در حال اخراج...")
+
+        # --- اخراج اکانت‌ها ---
+        from telethon.tl.functions.channels import EditBannedRequest
+        from telethon.tl.types import ChatBannedRights
+
+        kicked = 0
+        failed = 0
+        for user in deleted_users:
+            # ادمین‌ها رو اخراج نکن
+            if getattr(user, "admin_rights", None) is not None:
+                continue
+            # خود ربات رو اخراج نکن
+            try:
+                me = await client.get_me()
+                if user.id == me.id:
+                    continue
+            except Exception:
+                pass
+
+            while True:
+                try:
+                    await client(EditBannedRequest(
+                        channel=chat,
+                        user_id=user.id,
+                        banned_rights=ChatBannedRights(
+                            until_date=0,
+                            view_messages=True,
+                            send_messages=True,
+                            send_media=True,
+                            send_stickers=True,
+                            send_gifs=True,
+                            send_games=True,
+                            send_inline=True,
+                            embed_links=True,
+                        ),
+                    ))
+                    kicked += 1
+                    break
+                except FloodWaitError as exc:
+                    await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر... (اخراج‌شده: {kicked})")
+                    await asyncio.sleep(exc.seconds + 1)
+                except Exception as exc:
+                    logger.warning("اخراج کاربر %s ناموفق بود: %s", user.id, exc)
+                    failed += 1
+                    break
+
+            # نوتیفیکیشن وضعیت هر ۱۰ اخراج
+            if kicked % 10 == 0 and kicked > 0:
+                await status.edit(f"⏳ در حال اخراج... ({kicked}/{len(deleted_users)})")
+            await asyncio.sleep(0.5)
+
+        msg = (
+            f"✅ عملیات اخراج اکانت‌های حذف‌شده پایان یافت.\n"
+            f"👥 کل اعضای بررسی‌شده: {total}\n"
+            f"🚪 اخراج‌شده: {kicked}\n"
+        )
+        if failed:
+            msg += f"⚠️ ناموفق: {failed}\n"
+        await finish_status(status, msg, 8)
+        logger.info("🧹 اخراج اکانت‌های حذف‌شده: total=%d, kicked=%d, failed=%d (chat=%s)",
+                    total, kicked, failed, event.chat_id)
+
+    except Exception as exc:
+        logger.exception("خطا در deloff")
+        await status.edit(f"❌ اخراج اکانت‌های حذف‌شده ناموفق بود: {html.escape(str(exc))[:700]}")
+
+
 # ==================== اجرای برنامه ====================
 async def main():
     start_keep_alive()
@@ -341,7 +583,7 @@ async def main():
     me = await client.get_me()
     logger.info("✅ Tele4U Lite اجرا شد: %s (ID: %s)", me.first_name, me.id)
     logger.info("🤖 فقط دستورات از @%s اجرا می‌شه", ALLOWED_BOT_USERNAME)
-    logger.info("📡 دستورات فعال: !tagall, !delall")
+    logger.info("📡 دستورات فعال: !tagall, !delall, !startvch, !delvch, !deloff")
     logger.info("📨 گزارش وضعیت هر %d دقیقه به آیدی %s",
                 STATUS_REPORT_INTERVAL_MINUTES, STATUS_REPORT_RECEIVER_ID)
     logger.info("🔑 کد آنلاین: %s", ONLINE_CHECK_CODE)
