@@ -538,9 +538,10 @@ async def kick_deleted_accounts(event):
         await status.edit(f"🔍 {len(deleted_users)} اکانت حذف‌شده پیدا شد؛ در حال اخراج...")
 
         # --- اخراج اکانت‌ها ---
-        # از متد سطح بالای client.edit_permissions() استفاده می‌کنیم
-        # این متد همه InputPeer conversionها رو خودش هندل می‌کنه و در همه نسخه‌های
-        # Telethon پایداره. با view_messages=True کاربر از گروه اخراج می‌شه.
+        # از متد سطح بالای client.kick_participant() استفاده می‌کنیم
+        # این متد خودش نوع گروه (عادی یا سوپرگروه) رو تشخیص می‌ده و روش مناسب رو
+        # به‌کار می‌بره: برای گروه عادی از DeleteChatUserRequest و برای سوپرگروه
+        # از EditBannedRequest استفاده می‌کنه. در همه نسخه‌های Telethon پایداره.
 
         kicked = 0
         failed = 0
@@ -562,21 +563,8 @@ async def kick_deleted_accounts(event):
 
             while True:
                 try:
-                    # view_messages=True یعنی کاربر از دیدن پیام‌ها منع می‌شه = اخراج
-                    # until_date=0 یعنی اخراج دائمی
-                    await client.edit_permissions(
-                        chat,
-                        user.id,
-                        until_date=0,
-                        view_messages=True,
-                        send_messages=True,
-                        send_media=True,
-                        send_stickers=True,
-                        send_gifs=True,
-                        send_games=True,
-                        send_inline=True,
-                        embed_link_previews=True,
-                    )
+                    # kick_participant خودش conversion و نوع گروه رو هندل می‌کنه
+                    await client.kick_participant(chat, user.id)
                     kicked += 1
                     logger.info("🚪 کاربر %s اخراج شد", user.id)
                     break
