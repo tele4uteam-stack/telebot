@@ -17,6 +17,7 @@ import asyncio
 import html
 import logging
 import os
+import random
 import threading
 from datetime import datetime, timedelta
 
@@ -372,17 +373,19 @@ async def start_voice_chat(event):
             logger.warning("بررسی وضعیت ویس چت ناموفق بود: %s", exc)
 
         # --- ساخت ویس چت ---
+        # random_id باید یک عدد int باشه (طبق مستندات TL)
+        rand_id = random.randint(0, 0x7FFFFFFF)
         try:
             await client(CreateGroupCallRequest(
                 peer=chat,
-                random_id=os.urandom(16).hex()[:14],
+                random_id=rand_id,
             ))
         except FloodWaitError as exc:
             await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر...")
             await asyncio.sleep(exc.seconds + 1)
             await client(CreateGroupCallRequest(
                 peer=chat,
-                random_id=os.urandom(16).hex()[:14],
+                random_id=random.randint(0, 0x7FFFFFFF),
             ))
 
         await status.edit("✅ ویس چت ساخته شد؛ در حال پیدا کردن اعلان آبی...")
@@ -511,48 +514,52 @@ async def kick_deleted_accounts(event):
         await status.edit(f"🔍 {len(deleted_users)} اکانت حذف‌شده پیدا شد؛ در حال اخراج...")
 
         # --- اخراج اکانت‌ها ---
-        from telethon.tl.functions.channels import EditBannedRequest
-        from telethon.tl.types import ChatBannedRights
+        # برای اخراج واقعی کاربر از گروه از KickChannelParticipantRequest استفاده می‌کنیم
+        # (EditBannedRequest فقط ban می‌کنه ولی کاربر رو خارج نمی‌کنه)
+        from telethon.tl.functions.channels import KickChannelParticipantRequest
 
         kicked = 0
         failed = 0
+        # آیدی خود ربات رو یک بار می‌گیریم
+        try:
+            me = await client.get_me()
+            my_id = me.id
+        except Exception:
+            my_id = None
+
         for user in deleted_users:
             # ادمین‌ها رو اخراج نکن
             if getattr(user, "admin_rights", None) is not None:
                 continue
             # خود ربات رو اخراج نکن
-            try:
-                me = await client.get_me()
-                if user.id == me.id:
-                    continue
-            except Exception:
-                pass
+            if my_id is not None and user.id == my_id:
+                continue
 
             while True:
                 try:
-                    await client(EditBannedRequest(
+                    await client(KickChannelParticipantRequest(
                         channel=chat,
                         user_id=user.id,
-                        banned_rights=ChatBannedRights(
-                            until_date=0,
-                            view_messages=True,
-                            send_messages=True,
-                            send_media=True,
-                            send_stickers=True,
-                            send_gifs=True,
-                            send_games=True,
-                            send_inline=True,
-                            embed_links=True,
-                        ),
+                        # برای اکانت‌های دلیت‌اکانت‌شده، just_clean=True
+                        # کاربر رو از لیست اعضا حذف می‌کنه بدون ایجاد محدودیت
+                        just_clean=False,
                     ))
                     kicked += 1
+                    logger.info("🚪 کاربر %s اخراج شد", user.id)
                     break
                 except FloodWaitError as exc:
                     await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر... (اخراج‌شده: {kicked})")
                     await asyncio.sleep(exc.seconds + 1)
                 except Exception as exc:
-                    logger.warning("اخراج کاربر %s ناموفق بود: %s", user.id, exc)
-                    failed += 1
+                    err_str = str(exc)
+                    # اگه کاربر از قبل اخراج شده یا نیست، خطا رو رد کن
+                    if "USER_NOT_PARTICIPANT" in err_str or "CHAT_ADMIN_REQUIRED" in err_str:
+                        logger.warning("کاربر %s قبلاً اخراج شده یا دسترسی کافی نیست: %s",
+                                       user.id, exc)
+                        failed += 1
+                    else:
+                        logger.warning("اخراج کاربر %s ناموفق بود: %s", user.id, exc)
+                        failed += 1
                     break
 
             # نوتیفیکیشن وضعیت هر ۱۰ اخراج
