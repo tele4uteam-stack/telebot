@@ -538,20 +538,37 @@ async def kick_deleted_accounts(event):
         await status.edit(f"🔍 {len(deleted_users)} اکانت حذف‌شده پیدا شد؛ در حال اخراج...")
 
         # --- اخراج اکانت‌ها ---
-        # از متد سطح بالای client.kick_participant() استفاده می‌کنیم
-        # این متد خودش نوع گروه (عادی یا سوپرگروه) رو تشخیص می‌ده و روش مناسب رو
-        # به‌کار می‌بره: برای گروه عادی از DeleteChatUserRequest و برای سوپرگروه
-        # از EditBannedRequest استفاده می‌کنه. در همه نسخه‌های Telethon پایداره.
+        # راه‌حل چندگانه: ابتدا نوع گروه رو تشخیص می‌دیم
+        # - گروه عادی (basic group): از DeleteChatUserRequest استفاده می‌کنیم
+        # - سوپرگروه/کانال: از EditBannedRequest با InputPeer درست استفاده می‌کنیم
+        # این دو روش مختلف رو امتحان می‌کنیم تا حداقل یکی کار کنه
+        from telethon.tl.functions.channels import EditBannedRequest
+        from telethon.tl.functions.messages import DeleteChatUserRequest
+        from telethon.tl.types import ChatBannedRights, InputPeerUser, PeerUser
 
         kicked = 0
         failed = 0
-        first_error = None  # اولین خطا رو نگه می‌داریم تا به کاربر نشون بدیم
+        first_error = None  # اولین خطا رو نگه می‌داریم تا به کاربر نشون بده
         # آیدی خود ربات رو یک بار می‌گیریم
         try:
             me = await client.get_me()
             my_id = me.id
         except Exception:
             my_id = None
+
+        # تشخیص نوع چت (گروه عادی یا سوپرگروه)
+        try:
+            chat_entity = await event.get_chat()
+            is_basic_group = getattr(chat_entity, "megagroup", False) is False and \
+                             not getattr(chat_entity, "gigagroup", False)
+            is_super_group = getattr(chat_entity, "megagroup", False) or \
+                             getattr(chat_entity, "gigagroup", False)
+            logger.info("🔍 نوع چت: basic=%s, super=%s, class=%s",
+                        is_basic_group, is_super_group, type(chat_entity).__name__)
+        except Exception as exc:
+            logger.warning("تشخیص نوع چت ناموفق بود: %s", exc)
+            is_basic_group = True
+            is_super_group = False
 
         for user in deleted_users:
             # ادمین‌ها رو اخراج نکن
@@ -561,31 +578,93 @@ async def kick_deleted_accounts(event):
             if my_id is not None and user.id == my_id:
                 continue
 
-            while True:
+            user_kicked = False
+
+            # --- روش ۱: DeleteChatUserRequest (برای گروه عادی) ---
+            if is_basic_group and not user_kicked:
                 try:
-                    # kick_participant خودش conversion و نوع گروه رو هندل می‌کنه
-                    await client.kick_participant(chat, user.id)
+                    await client(DeleteChatUserRequest(
+                        chat_id=event.chat_id,
+                        user_id=InputPeerUser(user_id=user.id, access_hash=0),
+                    ))
                     kicked += 1
-                    logger.info("🚪 کاربر %s اخراج شد", user.id)
-                    break
+                    user_kicked = True
+                    logger.info("🚪 کاربر %s با DeleteChatUser اخراج شد", user.id)
+                except FloodWaitError as exc:
+                    await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر... (اخراج‌شده: {kicked})")
+                    await asyncio.sleep(exc.seconds + 1)
+                    # retry
+                    try:
+                        await client(DeleteChatUserRequest(
+                            chat_id=event.chat_id,
+                            user_id=InputPeerUser(user_id=user.id, access_hash=0),
+                        ))
+                        kicked += 1
+                        user_kicked = True
+                        logger.info("🚪 کاربر %s با DeleteChatUser اخراج شد (retry)", user.id)
+                    except Exception as exc2:
+                        if first_error is None:
+                            first_error = f"{type(exc2).__name__}: {str(exc2)}"
+                        logger.warning("اخراج کاربر %s با DeleteChatUser ناموفق بود: %s",
+                                       user.id, exc2)
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = f"{type(exc).__name__}: {str(exc)}"
+                    logger.warning("اخراج کاربر %s با DeleteChatUser ناموفق بود: %s",
+                                   user.id, exc)
+
+            # --- روش ۲: EditBannedRequest با InputPeerUser (برای سوپرگروه) ---
+            if not user_kicked:
+                try:
+                    rights = ChatBannedRights(
+                        until_date=0,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_link_previews=True,
+                    )
+                    # استفاده از InputPeerUser به‌جای user.id خام
+                    await client(EditBannedRequest(
+                        channel=chat,
+                        participant=InputPeerUser(user_id=user.id, access_hash=0),
+                        banned_rights=rights,
+                    ))
+                    kicked += 1
+                    user_kicked = True
+                    logger.info("🚪 کاربر %s با EditBanned اخراج شد", user.id)
                 except FloodWaitError as exc:
                     await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر... (اخراج‌شده: {kicked})")
                     await asyncio.sleep(exc.seconds + 1)
                 except Exception as exc:
                     err_str = str(exc)
-                    err_type = type(exc).__name__
-                    # اولین خطا رو ذخیره کن
                     if first_error is None:
-                        first_error = f"{err_type}: {err_str}"
-                    # اگه کاربر از قبل اخراج شده یا نیست، خطا رو رد کن
-                    if "USER_NOT_PARTICIPANT" in err_str or "CHAT_ADMIN_REQUIRED" in err_str:
-                        logger.warning("کاربر %s قبلاً اخراج شده یا دسترسی کافی نیست: %s",
-                                       user.id, exc)
-                        failed += 1
-                    else:
-                        logger.warning("اخراج کاربر %s ناموفق بود: %s", user.id, exc)
-                        failed += 1
-                    break
+                        first_error = f"{type(exc).__name__}: {err_str}"
+                    logger.warning("اخراج کاربر %s با EditBanned ناموفق بود: %s",
+                                   user.id, exc)
+
+            # --- روش ۳: client.kick_participant (fallback) ---
+            if not user_kicked:
+                try:
+                    await client.kick_participant(chat, user.id)
+                    kicked += 1
+                    user_kicked = True
+                    logger.info("🚪 کاربر %s با kick_participant اخراج شد", user.id)
+                except FloodWaitError as exc:
+                    await status.edit(f"⏳ محدودیت تلگرام؛ {exc.seconds} ثانیه صبر... (اخراج‌شده: {kicked})")
+                    await asyncio.sleep(exc.seconds + 1)
+                except Exception as exc:
+                    err_str = str(exc)
+                    if first_error is None:
+                        first_error = f"{type(exc).__name__}: {err_str}"
+                    logger.warning("اخراج کاربر %s با kick_participant ناموفق بود: %s",
+                                   user.id, exc)
+
+            if not user_kicked:
+                failed += 1
 
             # نوتیفیکیشن وضعیت هر ۱۰ اخراج
             if kicked % 10 == 0 and kicked > 0:
