@@ -538,10 +538,9 @@ async def kick_deleted_accounts(event):
         await status.edit(f"🔍 {len(deleted_users)} اکانت حذف‌شده پیدا شد؛ در حال اخراج...")
 
         # --- اخراج اکانت‌ها ---
-        # از EditBannedRequest با banned_rights استفاده می‌کنیم (پایدار در همه نسخه‌های Telethon)
-        # وقتی view_messages=True باشه، کاربر از گروه اخراج می‌شه (نه فقط mute)
-        from telethon.tl.functions.channels import EditBannedRequest
-        from telethon.tl.types import ChatBannedRights
+        # از متد سطح بالای client.edit_permissions() استفاده می‌کنیم
+        # این متد همه InputPeer conversionها رو خودش هندل می‌کنه و در همه نسخه‌های
+        # Telethon پایداره. با view_messages=True کاربر از گروه اخراج می‌شه.
 
         kicked = 0
         failed = 0
@@ -563,23 +562,21 @@ async def kick_deleted_accounts(event):
 
             while True:
                 try:
-                    await client(EditBannedRequest(
-                        channel=chat,
-                        user_id=user.id,
-                        # until_date=0 یعنی اخراج دائمی (forever)
-                        # view_messages=True یعنی کاربر از گروه خارج می‌شه
-                        banned_rights=ChatBannedRights(
-                            until_date=0,
-                            view_messages=True,
-                            send_messages=True,
-                            send_media=True,
-                            send_stickers=True,
-                            send_gifs=True,
-                            send_games=True,
-                            send_inline=True,
-                            embed_links=True,
-                        ),
-                    ))
+                    # view_messages=True یعنی کاربر از دیدن پیام‌ها منع می‌شه = اخراج
+                    # until_date=0 یعنی اخراج دائمی
+                    await client.edit_permissions(
+                        chat,
+                        user.id,
+                        until_date=0,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_link_previews=True,
+                    )
                     kicked += 1
                     logger.info("🚪 کاربر %s اخراج شد", user.id)
                     break
