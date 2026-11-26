@@ -388,7 +388,7 @@ async def start_voice_chat(event):
                 random_id=random.randint(0, 0x7FFFFFFF),
             ))
 
-        await status.edit("✅ ویس چت ساخته شد؛ در حال پیدا کردن اعلان آبی...")
+        await status.edit("✅ویس چت ساخته شد؛...")
         logger.info("🎤 ویس چت ساخته شد (chat=%s)", event.chat_id)
 
         # --- پیدا کردن اعلان آبی (service message) و پین کردنش ---
@@ -431,7 +431,7 @@ async def start_voice_chat(event):
         if pinned:
             await finish_status(status, "✅ ویس چت شروع شد و اعلان آبی پین شد. 🎤", 5)
         else:
-            await finish_status(status, "✅ ویس چت شروع شد (اعلان آبی پیدا نشد تا پین شه).", 5)
+            await finish_status(status, "✅ ویس چت شروع شد....", 5)
 
     except Exception as exc:
         logger.exception("خطا در startvch")
