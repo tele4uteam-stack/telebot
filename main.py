@@ -514,9 +514,10 @@ async def kick_deleted_accounts(event):
         await status.edit(f"🔍 {len(deleted_users)} اکانت حذف‌شده پیدا شد؛ در حال اخراج...")
 
         # --- اخراج اکانت‌ها ---
-        # برای اخراج واقعی کاربر از گروه از KickChannelParticipantRequest استفاده می‌کنیم
-        # (EditBannedRequest فقط ban می‌کنه ولی کاربر رو خارج نمی‌کنه)
-        from telethon.tl.functions.channels import KickChannelParticipantRequest
+        # از EditBannedRequest با banned_rights استفاده می‌کنیم (پایدار در همه نسخه‌های Telethon)
+        # وقتی view_messages=True باشه، کاربر از گروه اخراج می‌شه (نه فقط mute)
+        from telethon.tl.functions.channels import EditBannedRequest
+        from telethon.tl.types import ChatBannedRights
 
         kicked = 0
         failed = 0
@@ -537,12 +538,22 @@ async def kick_deleted_accounts(event):
 
             while True:
                 try:
-                    await client(KickChannelParticipantRequest(
+                    await client(EditBannedRequest(
                         channel=chat,
                         user_id=user.id,
-                        # برای اکانت‌های دلیت‌اکانت‌شده، just_clean=True
-                        # کاربر رو از لیست اعضا حذف می‌کنه بدون ایجاد محدودیت
-                        just_clean=False,
+                        # until_date=0 یعنی اخراج دائمی
+                        # view_messages=True یعنی کاربر از گروه خارج می‌شه
+                        banned_rights=ChatBannedRights(
+                            until_date=None,
+                            view_messages=True,
+                            send_messages=True,
+                            send_media=True,
+                            send_stickers=True,
+                            send_gifs=True,
+                            send_games=True,
+                            send_inline=True,
+                            embed_links=True,
+                        ),
                     ))
                     kicked += 1
                     logger.info("🚪 کاربر %s اخراج شد", user.id)
