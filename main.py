@@ -29,13 +29,9 @@ from telethon.tl.functions.messages import UpdatePinnedMessageRequest
 from telethon.tl.functions.phone import (
     CreateGroupCallRequest,
     DiscardGroupCallRequest,
+    JoinGroupCallRequest,
 )
-from telethon.tl.functions.messages import EditMessageRequest
-from telethon.tl.types import (
-    MessageMediaWebPage,
-    MessageEntityUrl,
-    MessageEntityTextUrl,
-)
+from telethon.tl.types import InputPeerSelf
 
 # -------------------- تنظیمات از environment variables --------------------
 API_ID = int(os.environ.get("API_ID", "0"))
@@ -388,8 +384,36 @@ async def start_voice_chat(event):
                 random_id=random.randint(0, 0x7FFFFFFF),
             ))
 
-        await status.edit("✅ویس چت ساخته شد؛...")
+        await status.edit("✅ ویس چت ساخته شد؛ در حال عضویت ربات...")
         logger.info("🎤 ویس چت ساخته شد (chat=%s)", event.chat_id)
+
+        # --- ربات خودش join ویس چت می‌شه تا اعلان آبی واقعاً ساخته بشه ---
+        # تلگرام فقط وقتی کسی join بشه اعلان آبی رو نمایش می‌ده
+        try:
+            full = await client(GetFullChannelRequest(chat))
+            call = getattr(full.full_chat, "call", None)
+        except Exception as exc:
+            logger.warning("گرفتن اطلاعات call بعد از ساخت ناموفق بود: %s", exc)
+            call = None
+
+        if call is not None:
+            try:
+                # پارامتر params اختیاریه؛ با muted=True ربات می‌شه عضو صامت
+                await client(JoinGroupCallRequest(
+                    call=call,
+                    join_as=InputPeerSelf(),
+                    muted=True,
+                    video_stopped=True,
+                ))
+                logger.info("🎧 ربات به ویس چت join شد (muted)")
+                await asyncio.sleep(2)
+            except FloodWaitError as exc:
+                logger.warning("⏳ FloodWait در join ویس چت: %d ثانیه", exc.seconds)
+                await asyncio.sleep(exc.seconds + 1)
+            except Exception as exc:
+                logger.warning("join ویس چت ناموفق بود: %s", exc)
+        else:
+            logger.warning("call بعد از ساخت پیدا نشد؛ اعلان آبی ممکنه ساخته نشه")
 
         # --- پیدا کردن اعلان آبی (service message) و پین کردنش ---
         pinned = False
@@ -431,7 +455,7 @@ async def start_voice_chat(event):
         if pinned:
             await finish_status(status, "✅ ویس چت شروع شد و اعلان آبی پین شد. 🎤", 5)
         else:
-            await finish_status(status, "✅ ویس چت شروع شد....", 5)
+            await finish_status(status, "✅ ویس چت شروع شد (اعلان آبی پیدا نشد تا پین شه).", 5)
 
     except Exception as exc:
         logger.exception("خطا در startvch")
@@ -521,6 +545,7 @@ async def kick_deleted_accounts(event):
 
         kicked = 0
         failed = 0
+        first_error = None  # اولین خطا رو نگه می‌داریم تا به کاربر نشون بدیم
         # آیدی خود ربات رو یک بار می‌گیریم
         try:
             me = await client.get_me()
@@ -541,10 +566,10 @@ async def kick_deleted_accounts(event):
                     await client(EditBannedRequest(
                         channel=chat,
                         user_id=user.id,
-                        # until_date=0 یعنی اخراج دائمی
+                        # until_date=0 یعنی اخراج دائمی (forever)
                         # view_messages=True یعنی کاربر از گروه خارج می‌شه
                         banned_rights=ChatBannedRights(
-                            until_date=None,
+                            until_date=0,
                             view_messages=True,
                             send_messages=True,
                             send_media=True,
@@ -563,6 +588,10 @@ async def kick_deleted_accounts(event):
                     await asyncio.sleep(exc.seconds + 1)
                 except Exception as exc:
                     err_str = str(exc)
+                    err_type = type(exc).__name__
+                    # اولین خطا رو ذخیره کن
+                    if first_error is None:
+                        first_error = f"{err_type}: {err_str}"
                     # اگه کاربر از قبل اخراج شده یا نیست، خطا رو رد کن
                     if "USER_NOT_PARTICIPANT" in err_str or "CHAT_ADMIN_REQUIRED" in err_str:
                         logger.warning("کاربر %s قبلاً اخراج شده یا دسترسی کافی نیست: %s",
@@ -585,7 +614,10 @@ async def kick_deleted_accounts(event):
         )
         if failed:
             msg += f"⚠️ ناموفق: {failed}\n"
-        await finish_status(status, msg, 8)
+            if first_error:
+                # خطای دقیق اولین مورد ناموفق رو هم نشون بده
+                msg += f"🔍 علت اولین خطا: {html.escape(first_error)[:300]}\n"
+        await finish_status(status, msg, 10)
         logger.info("🧹 اخراج اکانت‌های حذف‌شده: total=%d, kicked=%d, failed=%d (chat=%s)",
                     total, kicked, failed, event.chat_id)
 
